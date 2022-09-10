@@ -1,0 +1,142 @@
+---
+title: "Untitled"
+author: "David Verry"
+date: "2022-09-03"
+output: html_document
+---
+
+```{r}
+library(shiny)
+library(tidyverse)
+library(profvis)
+library(plotly)
+library(data.table)
+library(rsconnect)
+#library(fasttime)
+
+
+
+form_length = 5
+
+## DEFINE URL ELEMENTS BY LEAGUE, USEFUL BELOW -----
+prem = "/E0.csv"
+league = prem
+
+start_year = 2002
+end_year = 2021
+
+
+read_results = function(league = "/E0.csv", first_year) {
+  
+  second_year = first_year+1
+  first_year_trimmed = str_sub(as.character(first_year), 3, 4)
+  second_year_trimmed = str_sub(as.character(second_year), 3, 4)
+  url = paste("https://www.football-data.co.uk/mmz4281/", 
+              first_year_trimmed, second_year_trimmed, league, sep = "")
+  
+  
+  # Create running points and goal diff totals by team
+  if (first_year == 2003) {   
+    performance_by_opponent_strength = read_csv(url) # data.table::fread is faster but has bug for 2003-04
+  } else{
+    performance_by_opponent_strength = data.table::fread(url)
+  }
+  
+  performance_by_opponent_strength = performance_by_opponent_strength %>%
+    mutate(season = first_year)
+  
+  return(performance_by_opponent_strength)
+  
+}
+
+performance_by_opponent_strength_function = function(results_table) {
+  
+  #browser()
+  
+  performance_by_opponent_strength = results_table %>%
+    mutate(Date = case_when(Date == "17/05/2016" ~ "15/05/2016",
+                            TRUE ~ Date)) %>% # manual fix needed for delayed MNU-BOU game
+    rename(date = Date) %>%
+    filter(date != "") %>%
+    select(1:10, season) %>%
+    group_by(date) %>%
+    mutate(fixture_id = paste(date, row_number(), sep = "_")) %>%
+    pivot_longer(cols = c(HomeTeam, AwayTeam), names_to = "venue", values_to = "team") %>%
+    mutate(gd_gw = case_when(venue == "HomeTeam" ~ (FTHG - FTAG),
+                             venue == "AwayTeam" ~ (FTAG - FTHG)),
+           pts_gw = case_when(venue == "HomeTeam" & FTHG > FTAG ~ 3,
+                              venue == "HomeTeam" & FTHG < FTAG ~ 0,
+                              venue == "AwayTeam" & FTAG > FTHG ~ 3,
+                              venue == "AwayTeam" & FTAG < FTHG ~ 0,
+                              TRUE ~ 1),
+           club = team,
+           team = paste(team, season-2000, season-1999,
+                        sep = "_"),
+           gls_gw = case_when(venue == "HomeTeam" ~ FTHG,
+                              venue == "AwayTeam" ~ FTAG)) %>%
+    group_by(team) %>%
+    mutate(gw = row_number(),
+           gd = cumsum(gd_gw),
+           pts = cumsum(pts_gw),
+           gls = cumsum(gls_gw)) %>%
+    select(date, fixture_id, gw, team, club, season, gd, pts, gls, pts_gw) %>%
+    
+    # Table position for every club on every date
+    mutate(date = lubridate::dmy(date)) %>%
+    group_by(season, date) %>%
+    arrange(desc(pts), desc(gd), desc(gls)) %>%
+    mutate(pos = row_number()) %>%
+    
+    # Table position for every club at end of season
+    # assumes every team plays final game on final day of season
+    ungroup() %>%
+    group_by(team) %>%
+    mutate(posfinal = pos[date == max(date, na.rm = TRUE)]) %>% 
+    
+    # Add form streaks
+    group_by(team) %>%
+    arrange(gw) %>%
+    mutate(pts_streak = RcppRoll::roll_sum(pts_gw, n = form_length, fill = NA, align = "right")) %>%
+    
+    # Select the useful columns
+    select(fixture_id, team, club, season, pts_gw, posfinal, pts_streak) %>%
+    
+    # Join opponents for each fixture back together 
+    left_join(x = ., y = ., 
+              by = "fixture_id",
+              suffix = c("1", "2")) %>%
+    
+    # keep useful rows only
+    filter(team1 != team2) %>%
+    
+    # sort opponent form and final position into buckets
+    mutate(opponent_form = case_when(pts_streak2 <= 4 ~ "0-4",
+                                     pts_streak2 <= 9 ~ "5-9",
+                                     pts_streak2 <= 15 ~ "10-15",
+                                     TRUE ~ NA_character_),
+           opponent_finish = case_when(posfinal2 <= 6 ~  "1-6",
+                                       posfinal2 <= 14 ~ "7-14",
+                                       posfinal2 <= 20 ~ "15-20",
+                                       TRUE ~ NA_character_)) %>%
+    
+    # summarise performance by team
+    select(team1, club1, season1, posfinal1, pts_gw1, opponent_form, opponent_finish) %>%
+    pivot_longer(cols = c(opponent_form, opponent_finish), names_to = "opponent_strength", values_to = "value") %>%
+    mutate(value = factor(value, levels = c("0-4", "5-9", "10-15", "15-20", "7-14", "1-6"))) %>%
+    group_by(team1, club1, season1, opponent_strength, value) %>%
+    summarise(posfinal = first(posfinal1),
+              games = n(),
+              ppg = mean(pts_gw1, na.rm = TRUE)) %>%
+    relocate(posfinal, .after= team1)
+  
+  return(performance_by_opponent_strength)
+  
+}
+    
+performance_by_opponent_strength_all_seasons = mapply(read_results, prem, 2002:2021) %>%
+  data.table::rbindlist(fill = TRUE) %>%
+  performance_by_opponent_strength_function()
+
+```
+
+

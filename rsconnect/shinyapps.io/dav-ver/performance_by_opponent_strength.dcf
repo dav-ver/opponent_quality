@@ -1,0 +1,14 @@
+name: performance_by_opponent_strength
+title: performance_by_opponent_strength
+username:
+account: dav-ver
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 6969135
+bundleId: 6288721
+url: https://dav-ver.shinyapps.io/performance_by_opponent_strength/
+when: 1662837754.50796
+lastSyncTime: 1662837754.50801
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: testing.Rmd
